@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+
+# Данные программы (создаются при первом запуске)
+data/
+cache/
+settings.json
+
+# Временные файлы
+*.tmp
+*.log
