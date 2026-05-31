@@ -1,4 +1,4 @@
-Локальный Rule 34. Local_R34 by Martin
+Локальный Rule 34. Local_R34
 
 Удобный поиск и просмотр изображений и видео скачанных из Rule34 с помощью Ruxx (https://github.com/trickerer01/Ruxx)
 
