@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QSplitter, QSizePolicy, QToolBar, QDialog,
                                QDialogButtonBox, QRadioButton, QButtonGroup,
                                QFrame)
-from PySide6.QtCore import Qt, QThread, Signal, QStringListModel, QSize, QTimer
+from PySide6.QtCore import Qt, QThread, Signal, QStringListModel, QSize, QTimer, QRunnable, QThreadPool, QObject
 from PySide6.QtGui import QPixmap, QIcon, QAction, QColor
 
 
@@ -801,15 +801,19 @@ class VideoFramesGenerator(QThread):
             return 0
 
 
-# ======================== ГЕНЕРАЦИЯ МИНИАТЮР ========================
-class ImageThumbnailWorker(QThread):
-    finished = Signal(str, QPixmap)
+# ======================== ГЕНЕРАЦИЯ МИНИАТЮР ПОТОКОМ ПУЛА ========================
+class ThumbnailSignals(QObject):
+    finished = Signal(str, QPixmap, int)  # file_path, pixmap, search_id
 
-    def __init__(self, file_path, cache_dir, size=180):
+
+class ImageThumbnailRunnable(QRunnable):
+    def __init__(self, file_path, cache_dir, size=180, search_id=0):
         super().__init__()
         self.file_path = file_path
         self.cache_dir = cache_dir
         self.size = size
+        self.search_id = search_id
+        self.signals = ThumbnailSignals()
 
     def run(self):
         hash_name = hashlib.md5(self.file_path.encode()).hexdigest() + '.jpg'
@@ -817,7 +821,7 @@ class ImageThumbnailWorker(QThread):
         if os.path.exists(cache_path):
             pixmap = QPixmap(cache_path)
             if not pixmap.isNull():
-                self.finished.emit(self.file_path, pixmap)
+                self.signals.finished.emit(self.file_path, pixmap, self.search_id)
                 return
         try:
             img = Image.open(self.file_path)
@@ -827,9 +831,9 @@ class ImageThumbnailWorker(QThread):
             os.makedirs(self.cache_dir, exist_ok=True)
             img.save(cache_path, 'JPEG', quality=85)
             pixmap = QPixmap(cache_path)
-            self.finished.emit(self.file_path, pixmap)
+            self.signals.finished.emit(self.file_path, pixmap, self.search_id)
         except Exception:
-            self.finished.emit(self.file_path, QPixmap())
+            self.signals.finished.emit(self.file_path, QPixmap(), self.search_id)
 
 
 # ======================== ОКНО ПРОСМОТРА ========================
@@ -972,7 +976,7 @@ class SplashWindow(QDialog):
         root.addSpacing(14)
 
         # Версия
-        ver = QLabel("v1.4  •  PySide6")
+        ver = QLabel("v1.5  •  PySide6")
         ver.setAlignment(Qt.AlignCenter)
         ver.setStyleSheet(f"font-size: 11px; color: {t['border_acc']};")
         root.addWidget(ver)
@@ -990,7 +994,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.settings = load_settings()
-        self.setWindowTitle("Local_R34 by Martin v1.4")
+        self.setWindowTitle("Local_R34 by Martin v1.5")
         self.setMinimumSize(1200, 700)
 
         self.root_path = self.settings.get("root_path", "")
@@ -999,7 +1003,7 @@ class MainWindow(QMainWindow):
         self.tag_completer = None
         self.current_results = []
         self.current_index = -1
-        self.thumb_workers = []
+        self.search_id = 0  # Токен для отсечения старых запросов пула
         self.current_video_frames = []
         self.current_frame_index = 0
 
@@ -1307,6 +1311,10 @@ class MainWindow(QMainWindow):
         results = c.fetchall()
         conn.close()
 
+        # Инкрементируем ID поиска и очищаем очередь пула от старых невыполненных задач
+        self.search_id += 1
+        QThreadPool.globalInstance().clear()
+
         self.clear_grid()
         self.current_results = []
         for row in results:
@@ -1337,25 +1345,24 @@ class MainWindow(QMainWindow):
     # ======================== МИНИАТЮРЫ ========================
     def clear_grid(self):
         for i in reversed(range(self.grid_layout.count())):
-            widget = self.grid_layout.itemAt(i).widget()
+            item = self.grid_layout.itemAt(i)
+            widget = item.widget()
             if widget:
                 widget.deleteLater()
-        for worker in self.thumb_workers:
-            if worker.isRunning():
-                worker.quit()
-                worker.wait()
-        self.thumb_workers.clear()
 
     def load_thumbnails(self):
         image_cache_dir = os.path.join(get_app_dir(), "cache", "thumbnails", "pic")
         os.makedirs(image_cache_dir, exist_ok=True)
+        
+        current_sid = self.search_id
+        
         for idx, item in enumerate(self.current_results):
             file_path = item['path']
             if item['type'] == 'image':
-                worker = ImageThumbnailWorker(file_path, image_cache_dir, size=150)
-                worker.finished.connect(self.add_thumbnail_to_grid)
-                worker.start()
-                self.thumb_workers.append(worker)
+                # Передаем задачу в глобальный пул потоков
+                runnable = ImageThumbnailRunnable(file_path, image_cache_dir, size=150, search_id=current_sid)
+                runnable.signals.finished.connect(self.add_thumbnail_to_grid)
+                QThreadPool.globalInstance().start(runnable)
             else:
                 frames_folder = self.get_video_frames_folder(file_path)
                 first_frame = os.path.join(frames_folder, "frame_001.jpg") if os.path.exists(frames_folder) else None
@@ -1364,13 +1371,17 @@ class MainWindow(QMainWindow):
                 else:
                     pixmap = QPixmap(150, 150)
                     pixmap.fill(Qt.gray)
-                self.add_thumbnail_to_grid(file_path, pixmap)
+                self.add_thumbnail_to_grid(file_path, pixmap, current_sid)
 
     def get_video_frames_folder(self, video_path):
         hash_name = hashlib.md5(video_path.encode()).hexdigest()
         return os.path.join(get_app_dir(), "cache", "video_frames", hash_name)
 
-    def add_thumbnail_to_grid(self, file_path, pixmap):
+    def add_thumbnail_to_grid(self, file_path, pixmap, search_id):
+        # Игнорируем сигналы, пришедшие от старых поисковых запросов
+        if search_id != self.search_id:
+            return
+            
         for idx, item in enumerate(self.current_results):
             if item['path'] == file_path:
                 # Контейнер с именем для стилизации
@@ -1599,10 +1610,12 @@ class MainWindow(QMainWindow):
         for idx, (rel_path,) in enumerate(images):
             full_path = os.path.join(self.root_path, rel_path)
             if os.path.exists(full_path):
-                worker = ImageThumbnailWorker(full_path, thumb_dir, size=150)
-                worker.run()
+                # Запускаем в синхронном режиме, но прокручиваем очередь событий UI
+                runnable = ImageThumbnailRunnable(full_path, thumb_dir, size=150, search_id=-1)
+                runnable.run()
             self.progress_bar.setValue(idx + 1)
             self.statusbar.showMessage(f"Генерация миниатюр для изображений ({idx+1}/{total})...")
+            QApplication.processEvents()  # Предотвращает фриз GUI
         self.progress_bar.setVisible(False)
         self.action_gen_image_thumbs.setEnabled(True)
         self.statusbar.showMessage("Генерация миниатюр для изображений завершена")
