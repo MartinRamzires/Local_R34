@@ -100,12 +100,11 @@
 
 ```
 1. Скачай и распакуй архив программы
-2. Положи рядом ffmpeg.exe, ffprobe.exe и Ruxx.exe
-3. Запусти Local_R34.exe
-4. Выбери корневую папку с работами
-5. Нажми "Просканировать / Обновить базу"
-6. Нажми "Превью картинок" и "Видео-превью" (один раз, для кеша)
-7. Ищи по тегам!
+2. Запусти Local_R34.exe
+3. Выбери корневую папку с работами
+4. Нажми "Просканировать / Обновить базу"
+5. Нажми "Превью картинок" и "Видео-превью" (один раз, для кеша)
+6. Ищи по тегам!
 ```
 
 **Структура папки с работами:**
@@ -215,12 +214,11 @@ The built-in interface for [Ruxx](https://github.com/trickerer01/Ruxx) lets you 
 
 ```
 1. Download and unpack the archive
-2. Place ffmpeg.exe, ffprobe.exe and Ruxx.exe next to Local_R34.exe
-3. Run Local_R34.exe
-4. Select the root folder with your works
-5. Click "Scan / Update Database"
-6. Click "Image Preview" and "Video Preview" (once, to build the cache)
-7. Search by tags!
+2. Run Local_R34.exe
+3. Select the root folder with your works
+4. Click "Scan / Update Database"
+5. Click "Image Preview" and "Video Preview" (once, to build the cache)
+6. Search by tags!
 ```
 
 **Folder structure:**
