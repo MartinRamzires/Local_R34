@@ -18,7 +18,8 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QDialogButtonBox, QRadioButton, QButtonGroup,
                                QFrame, QPlainTextEdit, QFormLayout)
 from PySide6.QtCore import Qt, QThread, Signal, QStringListModel, QSize, QTimer, QRunnable, QThreadPool, QObject
-from PySide6.QtGui import QPixmap, QIcon, QAction, QColor
+# ДОБАВЛЕНЫ: QMovie и QImageReader для корректной работы с GIF без искажения пропорций
+from PySide6.QtGui import QPixmap, QIcon, QAction, QColor, QMovie, QImageReader
 
 
 # ======================== ПУТИ (работает и из .py и из .exe) ========================
@@ -51,7 +52,7 @@ def get_tool_path(name: str) -> str:
 
 LANG_TEXT = {
     "ru": {
-        "title": "Local_R34 by Martin v1.6",
+        "title": "Local_R34 by Martin v1.6.2",
         "toolbar_settings": "⚙  Настройки",
         "toolbar_video": "🎬  Видео-превью",
         "toolbar_image": "🖼️  Превью картинок",
@@ -98,10 +99,9 @@ LANG_TEXT = {
         "dl_status_soft_stopping": "Остановка... Завершаем текущий тег...",
         "dl_status_hard_stopped": "Скачивание принудительно прервано!",
         "dl_status_done": "Завершено! Всего обработано тегов: {count}",
-        "dl_status_progress": "{tag}   [{current} из {total} тегов]",
     },
     "en": {
-        "title": "Local_R34 by Martin v1.6",
+        "title": "Local_R34 by Martin v1.6.2",
         "toolbar_settings": "⚙  Settings",
         "toolbar_video": "🎬  Video Preview",
         "toolbar_image": "🖼️  Image Preview",
@@ -148,7 +148,6 @@ LANG_TEXT = {
         "dl_status_soft_stopping": "Stopping... Finishing current tag...",
         "dl_status_hard_stopped": "Download forcefully terminated!",
         "dl_status_done": "Completed! Total tags processed: {count}",
-        "dl_status_progress": "{tag}   [{current} of {total} tags]",
     }
 }
 
@@ -436,7 +435,7 @@ def build_stylesheet(t: dict) -> str:
 
 
 # ======================== НАСТРОЙКИ ========================
-SETTINGS_FILE = os.path.join(get_app_dir(), "settings.json")
+SETTINGS_FILE = "settings.json"
 
 def load_settings():
     default = {"root_path": "", "theme": "dark", "lang": "ru"}
@@ -537,7 +536,7 @@ class SettingsDialog(QDialog):
 
 # ======================== ПОТОК МАССОВОГО СКАЧИВАНИЯ ========================
 class RuxxDownloadThread(QThread):
-    status_msg = Signal(str, int, int)  # tag, current, total
+    status_msg = Signal(str)
     finished_count = Signal(int)
 
     def __init__(self, tags, exe_path, base_dir, api_data):
@@ -556,10 +555,9 @@ class RuxxDownloadThread(QThread):
 
     def run(self):
         processed = 0
-        total = len(self.tags)
-        for idx, tag in enumerate(self.tags):
+        for tag in self.tags:
             if self._soft_stop: break
-            self.status_msg.emit(tag, idx + 1, total)
+            self.status_msg.emit(tag)
             tag_dir = os.path.join(self.base_dir, "".join(c for c in tag if c not in r'\/<>|:'))
             os.makedirs(tag_dir, exist_ok=True)
             
@@ -587,91 +585,39 @@ class RuxxDownloaderDialog(QDialog):
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setSpacing(6)
-        layout.setContentsMargins(14, 14, 14, 14)
-
-        # --- Теги ---
-        layout.addWidget(QLabel(self.t("dl_tags_label")))
         self.tags_entry = QPlainTextEdit()
-        self.tags_entry.setPlaceholderText(
-            "tag1\ntag2\ntag3" if self.lang == "en" else "тег1\nтег2\nтег3"
-        )
-        self.tags_entry.setMinimumHeight(130)
+        self.tags_entry.setPlaceholderText("Введите теги (каждый с новой строки)")
+        layout.addWidget(QLabel("Теги:"))
         layout.addWidget(self.tags_entry)
 
-        # --- Ruxx.exe ---
-        layout.addWidget(QLabel(self.t("dl_exe_label")))
-        exe_row = QHBoxLayout()
         self.exe_path_edit = QLineEdit(get_tool_path("Ruxx"))
-        exe_row.addWidget(self.exe_path_edit)
-        btn_browse_exe = QPushButton(self.t("dl_btn_browse"))
-        btn_browse_exe.setMaximumWidth(110)
-        btn_browse_exe.clicked.connect(self.browse_exe)
-        exe_row.addWidget(btn_browse_exe)
-        layout.addLayout(exe_row)
+        layout.addWidget(QLabel("Путь к Ruxx.exe:"))
+        layout.addWidget(self.exe_path_edit)
 
-        # --- Папка сохранения ---
-        layout.addWidget(QLabel(self.t("dl_out_label")))
-        folder_row = QHBoxLayout()
-        self.base_folder_edit = QLineEdit(get_app_dir())
-        folder_row.addWidget(self.base_folder_edit)
-        btn_browse_folder = QPushButton(self.t("dl_btn_browse"))
-        btn_browse_folder.setMaximumWidth(110)
-        btn_browse_folder.clicked.connect(self.browse_folder)
-        folder_row.addWidget(btn_browse_folder)
-        layout.addLayout(folder_row)
+        self.base_folder_edit = QLineEdit(os.getcwd())
+        layout.addWidget(QLabel("Папка сохранения:"))
+        layout.addWidget(self.base_folder_edit)
 
-        # --- API ---
-        layout.addWidget(QLabel(self.t("dl_api_label")))
-        api_row = QHBoxLayout()
+        # ОДНО ПОЛЕ ДЛЯ КЛЮЧА
         self.api_data_edit = QLineEdit()
-        self.api_data_edit.setPlaceholderText(
-            "api_key.user_id  (dot-separated)" if self.lang == "en"
-            else "api_ключ.user_id  (через точку)"
-        )
-        api_row.addWidget(self.api_data_edit)
-        btn_help = QPushButton(self.t("dl_btn_help"))
-        btn_help.setMaximumWidth(130)
-        btn_help.clicked.connect(self.show_help)
-        api_row.addWidget(btn_help)
-        layout.addLayout(api_row)
+        self.api_data_edit.setPlaceholderText("Введите: ключ.user_id (через точку!)")
+        layout.addWidget(QLabel("API Ключ и User ID:"))
+        layout.addWidget(self.api_data_edit)
 
-        layout.addSpacing(6)
-
-        # --- Кнопки управления ---
-        ctrl_row = QHBoxLayout()
-        self.btn_start = QPushButton(self.t("dl_btn_start"))
+        self.btn_start = QPushButton("🚀 Запустить")
         self.btn_start.clicked.connect(self.start_download)
-        ctrl_row.addWidget(self.btn_start)
+        layout.addWidget(self.btn_start)
 
-        self.btn_stop_soft = QPushButton(self.t("dl_btn_stop_soft"))
-        self.btn_stop_soft.setEnabled(False)
-        self.btn_stop_soft.clicked.connect(self.stop_download_softly)
-        ctrl_row.addWidget(self.btn_stop_soft)
+        self.btn_stop_soft = QPushButton("🛑 Остановить (корректно)")
+        self.btn_stop_soft.clicked.connect(lambda: self.dl_thread.stop_softly() if self.dl_thread else None)
+        layout.addWidget(self.btn_stop_soft)
 
-        self.btn_stop_hard = QPushButton(self.t("dl_btn_stop_hard"))
-        self.btn_stop_hard.setEnabled(False)
-        self.btn_stop_hard.clicked.connect(self.stop_download_forcefully)
-        ctrl_row.addWidget(self.btn_stop_hard)
-        layout.addLayout(ctrl_row)
+        self.btn_stop_hard = QPushButton("⚡ Остановить (принудительно)")
+        self.btn_stop_hard.clicked.connect(lambda: self.dl_thread.stop_forcefully() if self.dl_thread else None)
+        layout.addWidget(self.btn_stop_hard)
 
-        # --- Прогресс-бар и статус ---
-        self.dl_progress = QProgressBar()
-        self.dl_progress.setVisible(False)
-        self.dl_progress.setFixedHeight(14)
-        layout.addWidget(self.dl_progress)
-
-        self.status_lbl = QLabel(self.t("dl_status_idle"))
-        self.status_lbl.setWordWrap(True)
-        self.status_lbl.setObjectName("file_info_label")
+        self.status_lbl = QLabel("Ожидание...")
         layout.addWidget(self.status_lbl)
-
-        # --- Лог вывода ---
-        self.log_output = QPlainTextEdit()
-        self.log_output.setReadOnly(True)
-        self.log_output.setMinimumHeight(120)
-        self.log_output.setPlaceholderText("Log..." if self.lang == "en" else "Лог выполнения...")
-        layout.addWidget(self.log_output)
 
     def browse_exe(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select Ruxx.exe", "", "Executable Files (*.exe);;All Files (*)")
@@ -687,43 +633,23 @@ class RuxxDownloaderDialog(QDialog):
         QMessageBox.information(self, self.t("dl_help_title"), self.t("dl_help_content"))
 
     def start_download(self):
-        # Получаем список тегов из текстового поля
         tags = [line.strip() for line in self.tags_entry.toPlainText().split('\n') if line.strip()]
         if not tags: 
             return
 
-        # Получаем данные из полей
         exe_path = self.exe_path_edit.text().strip()
         base_dir = self.base_folder_edit.text().strip()
-        
-        # Берем данные API из ОДНОГО поля (которое ты назвал "ключ.user_id")
         api_data = self.api_data_edit.text().strip()
 
-        # Блокируем кнопку запуска, чтобы не запустить дважды
         self.btn_start.setEnabled(False)
 
-        # Создаем и запускаем поток
         self.dl_thread = RuxxDownloadThread(tags, exe_path, base_dir, api_data)
-        self.dl_progress.setVisible(True)
-        self.dl_progress.setMaximum(len(tags))
-        self.dl_progress.setValue(0)
-
-        def on_status(tag, current, total):
-            self.dl_progress.setValue(current)
-            msg = self.t("dl_status_progress").format(tag=tag, current=current, total=total)
-            self.status_lbl.setText(msg)
-            self.log_output.appendPlainText(msg)
-
-        self.dl_thread.status_msg.connect(on_status)
-        self.dl_thread.finished_count.connect(self.download_finished)
-        self.dl_thread.finished.connect(lambda: (
-            self.btn_start.setEnabled(True),
-            self.btn_stop_soft.setEnabled(False),
-            self.btn_stop_hard.setEnabled(False),
-            self.dl_progress.setVisible(False),
-        ))
-        self.btn_stop_soft.setEnabled(True)
-        self.btn_stop_hard.setEnabled(True)
+        
+        self.dl_thread.status_msg.connect(lambda t: self.status_lbl.setText(f"Качаем: {t}"))
+        self.dl_thread.finished_count.connect(lambda c: self.status_lbl.setText(f"Готово. Обработано тегов: {c}"))
+        
+        self.dl_thread.finished.connect(lambda: self.btn_start.setEnabled(True))
+        
         self.dl_thread.start()
 
     def stop_download_softly(self):
@@ -876,37 +802,88 @@ class VideoFramesGenerator(QThread):
             self.finished.emit()
             return
 
+        ffmpeg_path = get_tool_path("ffmpeg")
+        skipped = 0
+
         for idx, (file_id, rel_path) in enumerate(videos):
             full_path = os.path.join(self.root_path, rel_path)
             if not os.path.exists(full_path):
-                continue
-            frames_folder = os.path.join(self.frames_cache_dir, hashlib.md5(full_path.encode()).hexdigest())
-            if os.path.exists(frames_folder) and len(os.listdir(frames_folder)) >= self.frames_per_video:
+                skipped += 1
                 self.progress.emit(idx + 1, total)
                 continue
 
-            self.status.emit(f"Rendering Video Frames: {idx+1}/{total}")
-            duration = self.get_video_duration(full_path) or 300
-            step = duration / (self.frames_per_video + 1)
-            os.makedirs(frames_folder, exist_ok=True)
-            ffmpeg_path = get_tool_path("ffmpeg")
+            # Пропускаем GIF, так как теперь мы воспроизводим их нативно через QMovie
+            if full_path.lower().endswith('.gif'):
+                self.progress.emit(idx + 1, total)
+                continue
 
-            for i in range(1, self.frames_per_video + 1):
-                ts = max(0, min(duration, i * step + random.uniform(-step * 0.3, step * 0.3)))
-                out_path = os.path.join(frames_folder, f"frame_{i:03d}.jpg")
-                if os.path.exists(out_path):
-                    continue
-                cmd = [ffmpeg_path, "-i", full_path, "-ss", str(ts), "-vframes", "1", "-vf", "scale=320:-1", out_path, "-y"]
-                subprocess.run(cmd, capture_output=True, timeout=10)
+            frames_folder = os.path.join(
+                self.frames_cache_dir,
+                hashlib.md5(full_path.encode()).hexdigest()
+            )
+
+            try:
+                existing = len(os.listdir(frames_folder)) if os.path.exists(frames_folder) else 0
+            except OSError:
+                existing = 0
+            if existing >= self.frames_per_video:
+                self.progress.emit(idx + 1, total)
+                continue
+
+            self.status.emit(f"[{idx+1}/{total}]  {os.path.basename(full_path)}")
+
+            try:
+                duration = self.get_video_duration(full_path) or 300
+                step = duration / (self.frames_per_video + 1)
+                os.makedirs(frames_folder, exist_ok=True)
+
+                for i in range(1, self.frames_per_video + 1):
+                    ts = max(0.0, min(duration - 0.1,
+                                     i * step + random.uniform(-step * 0.3, step * 0.3)))
+                    out_path = os.path.join(frames_folder, f"frame_{i:03d}.jpg")
+                    if os.path.exists(out_path):
+                        continue
+
+                    cmd = [
+                        ffmpeg_path,
+                        "-ss", str(ts),
+                        "-i", full_path,
+                        "-vframes", "1",
+                        "-vf", "scale=320:-2",
+                        "-q:v", "3",
+                        out_path, "-y"
+                    ]
+                    try:
+                        subprocess.run(
+                            cmd,
+                            capture_output=True,
+                            timeout=30
+                        )
+                    except subprocess.TimeoutExpired:
+                        continue
+                    except Exception:
+                        continue
+
+            except Exception as e:
+                self.status.emit(f"[{idx+1}/{total}]  SKIP (error): {os.path.basename(full_path)}")
+
             self.progress.emit(idx + 1, total)
+
+        self.status.emit(f"Done! Processed {total - skipped} videos, skipped {skipped}.")
         self.finished.emit()
 
     def get_video_duration(self, video_path):
         ffprobe_path = get_tool_path("ffprobe")
-        cmd = [ffprobe_path, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", video_path]
+        cmd = [
+            ffprobe_path, "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            video_path
+        ]
         try:
-            return float(subprocess.check_output(cmd, timeout=10).decode().strip())
-        except:
+            out = subprocess.check_output(cmd, timeout=20, stderr=subprocess.DEVNULL).decode().strip()
+            return float(out)
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, ValueError, OSError):
             return 0
 
 
@@ -947,26 +924,132 @@ class ImageThumbnailRunnable(QRunnable):
 class ImageViewerWindow(QMainWindow):
     def __init__(self, file_path, parent=None):
         super().__init__(parent)
+        self.parent_win = parent
         self.setWindowTitle(os.path.basename(file_path))
         self.file_path = file_path
+        
+        # Создаем центральный виджет и вертикальную разметку
+        main_widget = QWidget()
+        layout = QVBoxLayout(main_widget)
+        
         self.image_label = QLabel()
         self.image_label.setAlignment(Qt.AlignCenter)
-        self.setCentralWidget(self.image_label)
+        layout.addWidget(self.image_label, 1) # Даем контенту максимальное растяжение
+        
+        # Нижняя горизонтальная панель навигации (как в основном блоке)
+        nav_row = QHBoxLayout()
+        self.btn_prev = QPushButton(self.parent_win.t("btn_prev") if self.parent_win else "◀ Пред.")
+        self.btn_prev.clicked.connect(self.show_prev_file)
+        
+        self.btn_save = QPushButton(self.parent_win.t("btn_save") if self.parent_win else "💾 Сохранить в...")
+        self.btn_save.clicked.connect(self.parent_win.save_current_file if self.parent_win else lambda: None)
+        
+        self.btn_next = QPushButton(self.parent_win.t("btn_next") if self.parent_win else "След. ▶")
+        self.btn_next.clicked.connect(self.show_next_file)
+        
+        nav_row.addWidget(self.btn_prev)
+        nav_row.addWidget(self.btn_save)
+        nav_row.addWidget(self.btn_next)
+        layout.addLayout(nav_row)
+        
+        self.setCentralWidget(main_widget)
+        
+        # Инициализируем QMovie, если открываем GIF-файл
+        self.movie = None
+        if self.file_path.lower().endswith('.gif'):
+            self.movie = QMovie(self.file_path)
+            self.image_label.setMovie(self.movie)
+            
         self.load_image()
+        self.update_buttons_state()
         self.setWindowState(Qt.WindowMaximized)
 
+    def show_prev_file(self):
+        """Переключает основное окно на предыдущий элемент и обновляет полноэкранный вид."""
+        if self.parent_win and self.parent_win.current_index > 0:
+            self.parent_win.current_index -= 1
+            self.parent_win.display_current_file()
+            self.update_view_from_parent()
+
+    def show_next_file(self):
+        """Переключает основное окно на следующий элемент и обновляет полноэкранный вид."""
+        if self.parent_win and self.parent_win.current_index < len(self.parent_win.current_results) - 1:
+            self.parent_win.current_index += 1
+            self.parent_win.display_current_file()
+            self.update_view_from_parent()
+
+    def update_view_from_parent(self):
+        """Синхронизирует путь текущего файла с главным окном."""
+        if not self.parent_win or self.parent_win.current_index < 0:
+            return
+        item = self.parent_win.current_results[self.parent_win.current_index]
+        self.file_path = item['path']
+        self.setWindowTitle(os.path.basename(self.file_path))
+        
+        if self.movie:
+            self.movie.stop()
+            self.movie = None
+        self.image_label.setMovie(None)
+        self.image_label.clear()
+        
+        if self.file_path.lower().endswith('.gif'):
+            self.movie = QMovie(self.file_path)
+            self.image_label.setMovie(self.movie)
+            
+        self.load_image()
+        self.update_buttons_state()
+
+    def update_buttons_state(self):
+        """Обновляет доступность кнопок навигации по границам списка результатов."""
+        if self.parent_win:
+            self.btn_prev.setEnabled(self.parent_win.current_index > 0)
+            self.btn_next.setEnabled(self.parent_win.current_index < len(self.parent_win.current_results) - 1)
+
     def load_image(self):
-        pixmap = QPixmap(self.file_path)
-        if not pixmap.isNull():
-            self.image_label.setPixmap(pixmap.scaled(self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        if not self.parent_win or self.parent_win.current_index < 0:
+            return
+        item = self.parent_win.current_results[self.parent_win.current_index]
+
+        if self.movie:
+            # Читаем оригинальный размер GIF, чтобы рассчитать соотношение сторон
+            reader = QImageReader(self.file_path)
+            orig_size = reader.size()
+            if orig_size.isValid():
+                # Рассчитываем пропорциональный размер на основе текущего размера лейбла
+                scaled_size = orig_size.scaled(self.image_label.size(), Qt.KeepAspectRatio)
+                self.movie.setScaledSize(scaled_size)
+            if self.movie.state() != QMovie.Running:
+                self.movie.start()
+        elif item['type'] == 'image':
+            pixmap = QPixmap(self.file_path)
+            if not pixmap.isNull():
+                # Обычные картинки сохраняют пропорции благодаря Qt.KeepAspectRatio
+                self.image_label.setPixmap(pixmap.scaled(self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        else:
+            # Для видео отображаем первый сгенерированный кадр из кэша (если он есть)
+            v_folder = os.path.join(get_app_dir(), "cache", "video_frames", hashlib.md5(self.file_path.encode()).hexdigest())
+            f_frame = os.path.join(v_folder, "frame_001.jpg")
+            if os.path.exists(f_frame):
+                pixmap = QPixmap(f_frame)
+                if not pixmap.isNull():
+                    self.image_label.setPixmap(pixmap.scaled(self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            else:
+                self.image_label.setText(self.parent_win.t("view_idle"))
 
     def resizeEvent(self, event):
+        # Пересчитываем масштабы при изменении размеров окна пользователем
         self.load_image()
         super().resizeEvent(event)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
             self.close()
+        elif event.key() == Qt.Key_Left:
+            self.show_prev_file()
+        elif event.key() == Qt.Key_Right:
+            self.show_next_file()
+        else:
+            super().keyPressEvent(event)
 
 
 # ======================== СТАРТОВЫЙ ЗАСТАВОЧНЫЙ ЭКРАН ========================
@@ -1019,7 +1102,7 @@ class SplashWindow(QDialog):
         layout.addLayout(btn_row)
         layout.addSpacing(10)
 
-        ver = QLabel("v1.6  •  PySide6 UI Framework")
+        ver = QLabel("v1.6.2  •  PySide6 UI Framework")
         ver.setAlignment(Qt.AlignCenter)
         ver.setStyleSheet(f"font-size: 11px; color: {t['border_acc']};")
         layout.addWidget(ver)
@@ -1042,6 +1125,7 @@ class MainWindow(QMainWindow):
         self.search_id = 0
         self.current_video_frames = []
         self.current_frame_index = 0
+        self.current_movie = None # Добавлено поле для хранения объекта активной гифки
 
         self.setup_ui()
         self.apply_theme(self.settings.get("theme", "dark"))
@@ -1058,7 +1142,6 @@ class MainWindow(QMainWindow):
         main_layout = QHBoxLayout(central)
         main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Тулбар
         toolbar = QToolBar()
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
@@ -1077,12 +1160,10 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.action_image)
         toolbar.addSeparator()
 
-        # Новая кнопка интеграции модуля скачивания
         self.action_download = QAction(self.t("toolbar_download"), self)
         self.action_download.triggered.connect(self.open_downloader)
         toolbar.addAction(self.action_download)
 
-        # Левая часть
         left_panel = QWidget()
         left_panel.setMinimumWidth(520)
         left_layout = QVBoxLayout(left_panel)
@@ -1144,7 +1225,6 @@ class MainWindow(QMainWindow):
         self.scroll_area.setWidget(self.scroll_widget)
         left_layout.addWidget(self.scroll_area)
 
-        # Правая панель просмотра
         right_panel = QWidget()
         right_panel.setMinimumWidth(400)
         right_layout = QVBoxLayout(right_panel)
@@ -1158,6 +1238,9 @@ class MainWindow(QMainWindow):
         self.file_info_label = QLabel("")
         self.file_info_label.setObjectName("file_info_label")
         self.file_info_label.setAlignment(Qt.AlignCenter)
+        # Настройки для корректной работы кликабельной HTML-ссылки автора
+        self.file_info_label.setOpenExternalLinks(False)
+        self.file_info_label.linkActivated.connect(self.on_author_clicked)
         right_layout.addWidget(self.file_info_label)
 
         self.tags_label = QLabel(self.t("tags_prefix"))
@@ -1211,12 +1294,10 @@ class MainWindow(QMainWindow):
     def open_settings(self):
         dialog = SettingsDialog(self.settings.get("theme", "dark"), self.lang, self)
         if dialog.exec():
-            # Сохранение темы
             new_theme = dialog.get_selected_theme()
             if new_theme != self.settings.get("theme"):
                 self.apply_theme(new_theme)
             
-            # Сохранение языка
             new_lang = dialog.get_selected_lang()
             if new_lang != self.lang:
                 self.settings["lang"] = new_lang
@@ -1320,7 +1401,8 @@ class MainWindow(QMainWindow):
         sid = self.search_id
 
         for idx, item in enumerate(self.current_results):
-            if item['type'] == 'image':
+            # Для GIF-файлов создаем миниатюру сразу через ImageThumbnailRunnable
+            if item['type'] == 'image' or item['path'].lower().endswith('.gif'):
                 runnable = ImageThumbnailRunnable(item['path'], cache_dir, size=150, search_id=sid)
                 runnable.signals.finished.connect(self.add_thumbnail_to_grid)
                 QThreadPool.globalInstance().start(runnable)
@@ -1363,24 +1445,39 @@ class MainWindow(QMainWindow):
             self.current_index = idx
             self.display_current_file()
 
+    def on_author_clicked(self, author_name):
+        """Очищает строку поиска, подставляет автора и мгновенно инициирует поиск."""
+        self.search_query_edit.setText(author_name)
+        self.perform_search()
+
     def display_current_file(self):
         if self.current_index < 0 or self.current_index >= len(self.current_results): return
         item = self.current_results[self.current_index]
-        # Тип файла и размер
-        file_ext = os.path.splitext(item['path'])[1].lstrip('.').upper() or '?'
+
+        # Вычисление расширения файла и его размера на диске
+        ext_str = os.path.splitext(item['path'])[1].upper()
         try:
-            file_size = os.path.getsize(item['path'])
-            if file_size >= 1024 * 1024:
-                size_str = f"{file_size / 1024 / 1024:.1f} MB"
-            elif file_size >= 1024:
-                size_str = f"{file_size / 1024:.1f} KB"
+            size_bytes = os.path.getsize(item['path'])
+            if size_bytes >= 1024 * 1024:
+                size_str = f"{size_bytes / (1024 * 1024):.1f} МБ"
+            elif size_bytes >= 1024:
+                size_str = f"{size_bytes / 1024:.1f} КБ"
             else:
-                size_str = f"{file_size} B"
-        except OSError:
-            size_str = "?"
-        self.file_info_label.setText(
-            f"👤 {item['author']}    🔢 {item['id']}    📄 {file_ext}    📦 {size_str}"
-        )
+                size_str = f"{size_bytes} Б"
+        except:
+            size_str = "?? МБ"
+
+        # Формирование префикса id
+        id_str = item['id']
+        if not str(id_str).startswith("rx_"):
+            id_str = f"rx_{id_str}"
+
+        # Создание ссылки для автора с сохранением стилей текущей темы
+        author_link = f'<a href="{item["author"]}" style="color: inherit; text-decoration: none;">👤 {item["author"]}</a>'
+        
+        # Сборка кастомной информационной строки
+        info_text = f"{author_link} &nbsp;&nbsp;|&nbsp;&nbsp; 🆔 {id_str} &nbsp;&nbsp;|&nbsp;&nbsp; 📐 {item['width']}x{item['height']} &nbsp;&nbsp;|&nbsp;&nbsp; 📦 {ext_str} &nbsp;&nbsp;|&nbsp;&nbsp; 💾 {size_str}"
+        self.file_info_label.setText(info_text)
 
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
@@ -1395,7 +1492,20 @@ class MainWindow(QMainWindow):
 
         self.stop_video_preview()
 
-        if item['type'] == 'image':
+        # ИСПРАВЛЕНИЕ: Нативное воспроизведение GIF с сохранением пропорций
+        if item['path'].lower().endswith('.gif'):
+            self.current_movie = QMovie(item['path'])
+            self.view_label.setMovie(self.current_movie)
+            
+            reader = QImageReader(item['path'])
+            orig_size = reader.size()
+            if orig_size.isValid():
+                # Масштабируем строго с флагом Qt.KeepAspectRatio
+                scaled_size = orig_size.scaled(self.view_label.size(), Qt.KeepAspectRatio)
+                self.current_movie.setScaledSize(scaled_size)
+            self.current_movie.start()
+            
+        elif item['type'] == 'image':
             pix = QPixmap(item['path'])
             if not pix.isNull():
                 self.view_label.setPixmap(pix.scaled(self.view_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
@@ -1416,6 +1526,11 @@ class MainWindow(QMainWindow):
     def stop_video_preview(self):
         self.video_timer.stop()
         self.current_video_frames = []
+        # Очищаем запущенную анимацию QMovie при переключении
+        if hasattr(self, 'current_movie') and self.current_movie:
+            self.current_movie.stop()
+            self.current_movie = None
+        self.view_label.setMovie(None)
 
     def show_previous(self):
         if self.current_index > 0:
@@ -1429,7 +1544,8 @@ class MainWindow(QMainWindow):
 
     def open_in_window(self):
         item = self.current_results[self.current_index]
-        if item['type'] == 'image':
+        # ИСПРАВЛЕНИЕ: Направляем GIF в ImageViewerWindow вместе с картинками
+        if item['type'] == 'image' or item['path'].lower().endswith('.gif'):
             self.viewer = ImageViewerWindow(item['path'], self)
             self.viewer.show()
         else:
@@ -1472,6 +1588,22 @@ class MainWindow(QMainWindow):
             QApplication.processEvents()
         self.progress_bar.setVisible(False)
         self.action_image.setEnabled(True)
+
+    # ИСПРАВЛЕНИЕ: Метод resizeEvent для главного окна для динамического ресайза без искажений
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'current_movie') and self.current_movie and self.current_movie.state() == QMovie.Running:
+            reader = QImageReader(self.current_movie.fileName())
+            orig_size = reader.size()
+            if orig_size.isValid():
+                scaled_size = orig_size.scaled(self.view_label.size(), Qt.KeepAspectRatio)
+                self.current_movie.setScaledSize(scaled_size)
+        elif self.current_index >= 0 and self.current_index < len(self.current_results):
+            item = self.current_results[self.current_index]
+            if item['type'] == 'image' and not item['path'].lower().endswith('.gif'):
+                pix = QPixmap(item['path'])
+                if not pix.isNull():
+                    self.view_label.setPixmap(pix.scaled(self.view_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
 
 def main():
