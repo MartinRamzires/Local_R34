@@ -536,7 +536,7 @@ class SettingsDialog(QDialog):
 
 # ======================== ПОТОК МАССОВОГО СКАЧИВАНИЯ ========================
 class RuxxDownloadThread(QThread):
-    status_msg = Signal(str)
+    status_msg = Signal(str, int, int)  # tag, current, total
     finished_count = Signal(int)
 
     def __init__(self, tags, exe_path, base_dir, api_data):
@@ -555,9 +555,10 @@ class RuxxDownloadThread(QThread):
 
     def run(self):
         processed = 0
-        for tag in self.tags:
+        total = len(self.tags)
+        for idx, tag in enumerate(self.tags):
             if self._soft_stop: break
-            self.status_msg.emit(tag)
+            self.status_msg.emit(tag, idx + 1, total)
             tag_dir = os.path.join(self.base_dir, "".join(c for c in tag if c not in r'\/<>|:'))
             os.makedirs(tag_dir, exist_ok=True)
             
@@ -585,39 +586,91 @@ class RuxxDownloaderDialog(QDialog):
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
+        layout.setSpacing(6)
+        layout.setContentsMargins(14, 14, 14, 14)
+
+        # --- Теги ---
+        layout.addWidget(QLabel(self.t("dl_tags_label")))
         self.tags_entry = QPlainTextEdit()
-        self.tags_entry.setPlaceholderText("Введите теги (каждый с новой строки)")
-        layout.addWidget(QLabel("Теги:"))
+        self.tags_entry.setPlaceholderText(
+            "tag1\ntag2\ntag3" if self.lang == "en" else "тег1\nтег2\nтег3"
+        )
+        self.tags_entry.setMinimumHeight(130)
         layout.addWidget(self.tags_entry)
 
+        # --- Ruxx.exe ---
+        layout.addWidget(QLabel(self.t("dl_exe_label")))
+        exe_row = QHBoxLayout()
         self.exe_path_edit = QLineEdit(get_tool_path("Ruxx"))
-        layout.addWidget(QLabel("Путь к Ruxx.exe:"))
-        layout.addWidget(self.exe_path_edit)
+        exe_row.addWidget(self.exe_path_edit)
+        btn_browse_exe = QPushButton(self.t("dl_btn_browse"))
+        btn_browse_exe.setMaximumWidth(110)
+        btn_browse_exe.clicked.connect(self.browse_exe)
+        exe_row.addWidget(btn_browse_exe)
+        layout.addLayout(exe_row)
 
-        self.base_folder_edit = QLineEdit(os.getcwd())
-        layout.addWidget(QLabel("Папка сохранения:"))
-        layout.addWidget(self.base_folder_edit)
+        # --- Папка сохранения ---
+        layout.addWidget(QLabel(self.t("dl_out_label")))
+        folder_row = QHBoxLayout()
+        self.base_folder_edit = QLineEdit(get_app_dir())
+        folder_row.addWidget(self.base_folder_edit)
+        btn_browse_folder = QPushButton(self.t("dl_btn_browse"))
+        btn_browse_folder.setMaximumWidth(110)
+        btn_browse_folder.clicked.connect(self.browse_folder)
+        folder_row.addWidget(btn_browse_folder)
+        layout.addLayout(folder_row)
 
-        # ОДНО ПОЛЕ ДЛЯ КЛЮЧА
+        # --- API ---
+        layout.addWidget(QLabel(self.t("dl_api_label")))
+        api_row = QHBoxLayout()
         self.api_data_edit = QLineEdit()
-        self.api_data_edit.setPlaceholderText("Введите: ключ.user_id (через точку!)")
-        layout.addWidget(QLabel("API Ключ и User ID:"))
-        layout.addWidget(self.api_data_edit)
+        self.api_data_edit.setPlaceholderText(
+            "api_key.user_id  (dot-separated)" if self.lang == "en"
+            else "api_ключ.user_id  (через точку)"
+        )
+        api_row.addWidget(self.api_data_edit)
+        btn_help = QPushButton(self.t("dl_btn_help"))
+        btn_help.setMaximumWidth(130)
+        btn_help.clicked.connect(self.show_help)
+        api_row.addWidget(btn_help)
+        layout.addLayout(api_row)
 
-        self.btn_start = QPushButton("🚀 Запустить")
+        layout.addSpacing(6)
+
+        # --- Кнопки управления ---
+        ctrl_row = QHBoxLayout()
+        self.btn_start = QPushButton(self.t("dl_btn_start"))
         self.btn_start.clicked.connect(self.start_download)
-        layout.addWidget(self.btn_start)
+        ctrl_row.addWidget(self.btn_start)
 
-        self.btn_stop_soft = QPushButton("🛑 Остановить (корректно)")
-        self.btn_stop_soft.clicked.connect(lambda: self.dl_thread.stop_softly() if self.dl_thread else None)
-        layout.addWidget(self.btn_stop_soft)
+        self.btn_stop_soft = QPushButton(self.t("dl_btn_stop_soft"))
+        self.btn_stop_soft.setEnabled(False)
+        self.btn_stop_soft.clicked.connect(self.stop_download_softly)
+        ctrl_row.addWidget(self.btn_stop_soft)
 
-        self.btn_stop_hard = QPushButton("⚡ Остановить (принудительно)")
-        self.btn_stop_hard.clicked.connect(lambda: self.dl_thread.stop_forcefully() if self.dl_thread else None)
-        layout.addWidget(self.btn_stop_hard)
+        self.btn_stop_hard = QPushButton(self.t("dl_btn_stop_hard"))
+        self.btn_stop_hard.setEnabled(False)
+        self.btn_stop_hard.clicked.connect(self.stop_download_forcefully)
+        ctrl_row.addWidget(self.btn_stop_hard)
+        layout.addLayout(ctrl_row)
 
-        self.status_lbl = QLabel("Ожидание...")
+        # --- Прогресс-бар и статус ---
+        self.dl_progress = QProgressBar()
+        self.dl_progress.setVisible(False)
+        self.dl_progress.setFixedHeight(14)
+        layout.addWidget(self.dl_progress)
+
+        self.status_lbl = QLabel(self.t("dl_status_idle"))
+        self.status_lbl.setWordWrap(True)
+        self.status_lbl.setObjectName("file_info_label")
         layout.addWidget(self.status_lbl)
+
+        # --- Лог вывода ---
+        self.log_output = QPlainTextEdit()
+        self.log_output.setReadOnly(True)
+        self.log_output.setMinimumHeight(120)
+        self.log_output.setPlaceholderText("Log..." if self.lang == "en" else "Лог выполнения...")
+        layout.addWidget(self.log_output)
 
     def browse_exe(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select Ruxx.exe", "", "Executable Files (*.exe);;All Files (*)")
@@ -633,23 +686,43 @@ class RuxxDownloaderDialog(QDialog):
         QMessageBox.information(self, self.t("dl_help_title"), self.t("dl_help_content"))
 
     def start_download(self):
+        # Получаем список тегов из текстового поля
         tags = [line.strip() for line in self.tags_entry.toPlainText().split('\n') if line.strip()]
         if not tags: 
             return
 
+        # Получаем данные из полей
         exe_path = self.exe_path_edit.text().strip()
         base_dir = self.base_folder_edit.text().strip()
+        
+        # Берем данные API из ОДНОГО поля (которое ты назвал "ключ.user_id")
         api_data = self.api_data_edit.text().strip()
 
+        # Блокируем кнопку запуска, чтобы не запустить дважды
         self.btn_start.setEnabled(False)
 
+        # Создаем и запускаем поток
         self.dl_thread = RuxxDownloadThread(tags, exe_path, base_dir, api_data)
-        
-        self.dl_thread.status_msg.connect(lambda t: self.status_lbl.setText(f"Качаем: {t}"))
-        self.dl_thread.finished_count.connect(lambda c: self.status_lbl.setText(f"Готово. Обработано тегов: {c}"))
-        
-        self.dl_thread.finished.connect(lambda: self.btn_start.setEnabled(True))
-        
+        self.dl_progress.setVisible(True)
+        self.dl_progress.setMaximum(len(tags))
+        self.dl_progress.setValue(0)
+
+        def on_status(tag, current, total):
+            self.dl_progress.setValue(current)
+            msg = self.t("dl_status_progress").format(tag=tag, current=current, total=total)
+            self.status_lbl.setText(msg)
+            self.log_output.appendPlainText(msg)
+
+        self.dl_thread.status_msg.connect(on_status)
+        self.dl_thread.finished_count.connect(self.download_finished)
+        self.dl_thread.finished.connect(lambda: (
+            self.btn_start.setEnabled(True),
+            self.btn_stop_soft.setEnabled(False),
+            self.btn_stop_hard.setEnabled(False),
+            self.dl_progress.setVisible(False),
+        ))
+        self.btn_stop_soft.setEnabled(True)
+        self.btn_stop_hard.setEnabled(True)
         self.dl_thread.start()
 
     def stop_download_softly(self):
